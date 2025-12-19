@@ -1,0 +1,597 @@
+#include "Rwmake.ch"
+#include "topconn.ch"
+
+namespace FIN
+ 
+/*/{Protheus.doc} TOTALIZADORAVP
+Função que irá calcular o total da posição do cliente da filial atual
+@type user function
+@author José Vitor Rodrigues
+@since 19/05/2025
+@version 1.0
+/*/
+User Function TOTALIZADORAVP()
+	Private AliasTMP:= "TMP" as character
+	Private oSay			 as object
+	//Parametros respondidos
+	Private cFiliais        as character
+	Private cIncluiDespesas as character
+	Private nTaxaJuros      as numeric
+	Private nTaxaDesconto   as numeric
+	Private nMulta          as character
+	Private dDataBs         as date
+	Private nAliqIGPM       as numeric
+	Private bFilSel         as logical
+	Private cNameTMP
+
+	If Select("TMP") > 0
+		TMP->(DbCloseArea()) // Fecha a area
+	Endif
+
+
+	If PerguntaAVP()
+
+		cIncluiDespesas := MV_PAR01
+		nMulta      	:= MV_PAR02
+		nTaxaDesconto   := MV_PAR03
+		nMulta          := MV_PAR04
+		dDataBs         := MV_PAR05
+		nAliqIGPM       := MV_PAR06
+
+		GetFilial()
+		if bFilSel
+			FWMsgRun(, {|oSay| Executa(oSay)})
+		EndIf
+	EndIf
+Return
+
+/*/{Protheus.doc} Executa
+	Responsavel por chamar as fucoes que executa a rotina
+	@type  Static Function
+	@author Jose Vitor Rodrigues
+	@since 19/05/2025
+	@version 1.0
+	@param oSay, object, parametro que defini o texto do carregamento
+/*/
+Static Function Executa(oSay)
+
+	oSay:SetText('Criando a Tabela Temporária')
+	criaTemporaria()
+
+	oSay:SetText('Criando a Tabela Temporária')
+	defineDados()
+
+	oSay:SetText('Gerando o excel')
+	GeraExcel()
+Return
+
+/*/{Protheus.doc} criaTemporaria
+	Função responsável pela criação da tabela temporária utilizada na rotina
+	@type  Static Function
+	@author José Vitor Rodrigues
+	@since 19/05/2025
+	@version 1.0
+/*/
+Static Function criaTemporaria()
+	local aColunas as array
+
+	aColunas :={}
+	aadd( aColunas , {"FILIAL"    , "C" , FWSizeFilial() , 00 } )
+	aadd( aColunas , {"EMISSAO"   , "D" , 08 , 00 } )
+	aadd( aColunas , {"PREFIXO"   , "C" , 03 , 00 } )
+	aadd( aColunas , {"DOCUM"     , "C" , 10 , 00 } )
+	aadd( aColunas , {"CLIENTE"   , "C" , 06 , 00 } )
+	aadd( aColunas , {"PARCELA"   , "C" , 03 , 00 } )
+	aadd( aColunas , {"PROCESSO"  , "C" , 01 , 00 } )
+	aadd( aColunas , {"BANCO"     , "C" , 05 , 00 } )
+	aadd( aColunas , {"VENCTO"    , "D" , 08 , 00 } )
+	aadd( aColunas , {"FV"        , "C" , 01 , 00 } )
+	aadd( aColunas , {"VALOR"     , "N" , 12 , 02 } )
+	aadd( aColunas , {"ACRESC"    , "N" , 12 , 02 } )
+	aadd( aColunas , {"SALDO"     , "N" , 12 , 02 } )
+	aadd( aColunas , {"JR_MUL"    , "N" , 12 , 02 } )
+	aadd( aColunas , {"SLD_QUIT"  , "N" , 12 , 02 } )
+	aadd( aColunas , {"MES_ATR"   , "N" , 12 , 02 } )
+	aadd( aColunas , {"SECURIT"   , "C" , 10 , 00 } )
+	aadd( aColunas , {"PARCEIRO"   , "C" , 10 , 00 } )
+
+	oTempTable := FWTemporaryTable():New(AliasTMP)
+	oTemptable:SetFields(aColunas)
+    oTemptable:AddIndex("1", {"FILIAL","PREFIXO","DOCUM"} )
+	oTempTable:Create()
+	
+	cNameTMP := oTempTable:GetTableNameForQuery()
+
+
+Return 
+
+/*/{Protheus.doc} defineDados
+	Define os dados a serem salvo na tabela temporaria
+	@type  Static Function
+	@author José Vitor Rodrigues
+	@since 19/05/2025
+	@version 1.0
+/*/
+Static Function defineDados()
+	Local ZZZ       := 'ZZZ'
+	Local totnom    := 0
+	Local totenc    := 0
+	Local vMulta    := 0
+	Local vJdia     := 0
+	Local vJuros    := 0
+	Local vParc     := 0
+	Local qsomt     := 0
+	Local qsom2     := 0
+	Local qtd2      := 0
+
+	cquery := " SELECT E1_CLIENTE, E1_PREFIXO, E1_NUM, E1_PARCELA ,E1_TIPO, E1_FILIAL, E1_PRODUTO, E1_LOJA, "
+	cquery += " 	   E1_EMISSAO, E1_VENCTO, E1_VALOR, E1_ACRESC, E1_SALDO, E1_SDACRES, E1_VALLIQ, E1_SALDO,"
+	cquery += " 	   E1_PORTADO, E1_ZZSECUR, E1_ZZPARCE, E1_FIXVAR, E1_TIPIGPM, E1_ZZPRCSS "
+	cquery += " FROM " + retsqlname('SE1')
+	cquery += " WHERE E1_FILIAL IN (" + cFiliais + ") "
+	cquery += "       AND D_E_L_E_T_ = '' AND E1_SALDO > 0 "
+
+	If cIncluiDespesas <> 'S'    // Se Inclui as Despesas
+		cquery += " AND E1_PREFIXO <> '"+ZZZ+"' "
+	EndIf
+
+	cquery  += " ORDER BY E1_NUM, E1_VENCTO "
+
+	If Select("TC1") > 0
+		TC1->(DbCloseArea()) // Fecha a area
+	Endif
+	
+	TCQUERY cQuery New Alias "TC1"
+
+	DbSelectArea("TC1")
+	_aTC1   := GetArea()
+	DbGoTop()
+
+	While !Eof()		
+		cCliente := TC1->E1_CLIENTE
+		qbusc    := TC1->(E1_PREFIXO+E1_NUM+E1_PARCELA+E1_TIPO+E1_CLIENTE) //cCLIENTE
+		cBuscaZZC:= TC1->(E1_FILIAL+E1_PRODUTO+E1_CLIENTE+E1_LOJA)		
+		emiss := SUBSTR(TC1->E1_EMISSAO,7,2)+'/'+SUBSTR(TC1->E1_EMISSAO,5,2)+'/'+SUBSTR(TC1->E1_EMISSAO,1,4)
+		vecto := SUBSTR(TC1->E1_VENCTO,7,2)+'/'+SUBSTR(TC1->E1_VENCTO,5,2)+'/'+SUBSTR(TC1->E1_VENCTO,1,4)
+		
+		If Empty(dDataBs)
+			dDifer := (dDatabase - ctod(vecto))
+		Else
+			dDifer := (dDataBs - ctod(vecto)) // se for positivo tem que aplicar juros, senão, desconto.
+		EndIf
+
+		vJuros	:= 0
+		vMulta	:= 0
+		vJdia   := 0
+		tDife   := ROUND((dDifer/30),6)
+		dDife   := (tDife * 30)
+		
+		nAcresc := ((TC1->E1_VALOR+TC1->E1_ACRESC)*(nAliqIGPM/100))
+		vParc   := (ROUND(TC1->E1_SALDO,2)+round(TC1->E1_SDACRES,2)) + nAcresc
+		qvalo   := ROUND((TC1->E1_SALDO)+(TC1->E1_SDACRES),2) + nAcresc
+		
+		qliq    := TC1->E1_VALLIQ
+		qsom2   := TC1->E1_SALDO
+		
+		b       := 0
+		If dDifer > 0  // vencido
+			vJuros	:= 0
+			vMulta 	:= Round(vParc * (nMulta/100),2)
+			qPot  := Exp( ( Log ((1 + (nTaxaJuros/100) ) ) * (dDifer/30) ))
+			qSomt := (vParc * qPot) + vMulta
+			qrest :=  qvalo - qsomt
+		Else    //a vencer
+			//vMulta:= 0
+			qPot  := Exp( ( Log ((1 + (nTaxaDesconto/100) ) ) * (dDifer/30) ))
+			qSomt := vParc * qPot
+			qRest := vParc - qSomt
+		EndIf
+
+		cNum    := TC1->E1_NUM
+		
+		totnom  := totnom + round(qvalo,2)
+		totenc  := totenc + round(qsomt,2)
+		qtd2    := qtd2 + 1
+
+		// Gravando Registros na Tabela Temporária para o Excel
+		RecLock("TMP",.T.)
+		TMP->FILIAL  := TC1->E1_FILIAL
+		TMP->EMISSAO := ctod(emiss)
+		TMP->PREFIXO := TC1->E1_PREFIXO
+		TMP->DOCUM   := TC1->E1_NUM
+		TMP->PARCELA := TC1->E1_PARCELA
+		TMP->BANCO   := TC1->E1_PORTADO
+		TMP->VENCTO  := STOD(TC1->E1_VENCTO)
+		TMP->FV      := TC1->E1_FIXVAR
+		TMP->VALOR   := TC1->E1_VALOR
+		TMP->ACRESC  := TC1->E1_ACRESC
+		TMP->SALDO   := QVALO
+		TMP->JR_MUL  := (qrest*-1)
+		TMP->SLD_QUIT:= QSOMT
+		TMP->MES_ATR := (tDife *-1)
+		TMP->SECURIT := TC1->E1_ZZSECUR
+		TMP->PROCESSO:= TC1->E1_ZZPRCSS
+		TMP->PARCEIRO:= TC1->E1_ZZPARCE
+		TMP->CLIENTE:= TC1->E1_CLIENTE
+		TMP->(MsUnlock())
+		DbSelectArea("TC1")
+		DbSkip()
+	EndDo	
+
+	
+Return 
+
+/*/{Protheus.doc} GeraExcel
+	Funcao responsavel pela geracao do Excel contendo os dados Totalizados de cada cliente
+	@type  Static Function
+	@author José Vitor Rodrigues
+	@since 19/05/2025
+	@version 1.0
+/*/
+Static Function GeraExcel()
+	Local cArquivo                                          as character
+	Local cClienteAt                                        as character
+	Local cPrefixo                                          as character
+	Local cDocumento                                        as character
+	Local cSecuritizadora                                   as character
+	Local cParceiro                                         as character
+	Local nValor                                            as numeric
+	Local nAcrescimo                                        as numeric
+	Local nSaldo                                            as numeric
+	Local nJurosMulta                                       as numeric
+	Local nSaldoQuitacao                                    as numeric
+	Local oFWMsExcelEx                                      as object
+	Local nAtual      := 0                                  as numeric
+	Local aColunas    := {}                                 as array
+	Local cFonte      := FwPrinterFont():Arial()            as character
+	Local nTamFonte   := 12                                 as numeric
+	Local lItalico    := .F.                                as logical
+	Local lNegrito    := .T.                                as logical
+	Local lSublinhado := .F.                                as logical
+	Local oCellHoriz := FwXlsxCellAlignment():Horizontal() as object
+	Local oCellVerti := FwXlsxCellAlignment():Vertical()   as object
+	Local cHorAlinha := ''                                 as character
+	Local cVerAlinha := ''                                 as character
+	Local lQuebrLin  := .F.                                as logical
+	Local nRotation  := 0                                  as numeric
+	Local cCustFormaTXT := ''                              as character
+	Local cCustFormaNUM := '#,##0.00'                      as character
+	Local cCorFundo  := ''                                 as character
+	Local cCorPreto  := '000000'                           as character
+	Local cCorAzulE  := '4F81BD'                           as character
+	Local cCorTxtCab := '000000'                           as character
+	Local cCorAzulC1 := 'B8CCE4'                           as character
+	Local cCorAzulC2 := 'DCE6F1'                           as character
+
+	dbSelectArea(AliasTMP)
+	(AliasTMP)->(dbGoTop())
+
+	If (AliasTMP)->(EOF())
+		alert("Nenhum dado foi gerado, verifique os parametros e gere novamente")
+		return
+	Endif
+
+	cQuery := "SELECT DISTINCT FILIAL FROM "+cNameTMP
+	TCQUERY cQuery New Alias "FIL"
+
+	dbSelectArea("FIL")
+	FIL->(dbGoTop())
+
+	aadd(aColunas, {'C', 'FILIAL'  , 20})
+    aadd(aColunas, {'C', 'CLIENTE' , 20})
+    aadd(aColunas, {'C', 'PRF',      20})
+    aadd(aColunas, {'C', 'DOCUM'   , 20})
+    aadd(aColunas, {'N', 'VALOR'   , 20})
+    aadd(aColunas, {'N', 'ACRESC'  , 20})
+    aadd(aColunas, {'N', 'SALDO'   , 20})
+    aadd(aColunas, {'N', 'JR_MUL'  , 20})
+    aadd(aColunas, {'N', 'SLD_QUIT', 20})
+    aadd(aColunas, {'C', 'SECURIT' , 20})
+    aadd(aColunas, {'C', 'PARCEIRO', 20})
+	oFWMsExcelEx := FwPrinterXlsx():New(.T.)
+	oCellHoriz  := FwXlsxCellAlignment():Horizontal()
+	oCellVerti  := FwXlsxCellAlignment():Vertical()
+
+	cArquivo := "C:\spool\Totalizador AVP"+SUBSTR(Time(),1,2)+SUBSTR(Time(),4,2)+SUBSTR(Time(),7,2)
+	If oFWMsExcelEx:Activate(cArquivo)
+		
+		while FIL->(!EOF())
+			cFilialAtual := FIL->FILIAL
+			//Adiciona uma worksheet
+			oFWMsExcelEx:AddSheet(cFilialAtual)
+			//Depois de imprimir os textos do cabeçalho, vamos colocar a fonte como normal
+			  
+			oFWMsExcelEx:SetFont(cFonte, nTamFonte, lItalico, lNegrito, lSublinhado)
+			nTamFonte := 10
+            lNegrito  := .F.
+                
+            //Na primeira linha do cabeçalho, vamos definir como tudo centralizado, a cor do textoverde e de fundo branca
+            cHorAlinha  := oCellHoriz:Center()
+            cVerAlinha  := oCellVerti:Center()
+            oFWMsExcelEx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, cCorTxtCab,cCorAzulE, cCustFormaTXT)
+            //Percorre agora as colunas e vem setando o tamanho delas e colocando o nome
+            nLinExcel := 1
+            For nAtual := 1 To Len(aColunas)
+                oFWMsExcelEx:SetColumnsWidth(nAtual, nAtual, aColunas[nAtual][3])
+                oFWMsExcelEx:SetText(nLinExcel, nAtual, aColunas[nAtual][2])
+            Next
+           	   
+            oFWMsExcelEx:SetFont(cFonte, nTamFonte, lItalico, lNegrito, lSublinhado)
+
+			cQuery := "SELECT DISTINCT CLIENTE FROM "+cNameTMP+" WHERE FILIAL = '"+cFilialAtual+"'"
+			TCQUERY cQuery New Alias "CLI"
+			dbSelectArea("CLI")
+			CLI->(dbGoTop())
+			while CLI->(!EOF())
+				nValor         := 0
+				nAcrescimo     := 0
+				nSaldo         := 0
+				nJurosMulta    := 0
+				nSaldoQuitacao := 0
+				
+				cClienteAt := CLI->CLIENTE
+
+				cQuery := " SELECT DISTINCT "
+				cQuery += " 		FILIAL,   	PREFIXO,"
+				cQuery += " 		CLIENTE,	DOCUM,"
+				cQuery += " 		VALOR,		ACRESC,"
+				cQuery += " 		SALDO,		JR_MUL,"
+				cQuery += " 		SLD_QUIT,	SECURIT,"
+				cQuery += " 		PARCEIRO "
+				cQuery += " FROM " +cNameTMP
+				cQuery += " WHERE "
+				cQuery += " 	FILIAL = '"+cFilialAtual+"' "
+				cQuery += " 	AND CLIENTE = '"+cClienteAt+"'"
+				TCQUERY cQuery New Alias "VAL"
+
+				dbSelectArea("VAL")
+				VAL->(dbGoTop())
+				while VAL->(!EOF())
+					cPrefixo        := VAL->PREFIXO
+					cDocumento      := VAL->DOCUM
+					cSecuritizadora := VAL->SECURIT
+					cParceiro       := VAL->PARCEIRO
+					nValor          += VAL->VALOR
+					nAcrescimo      += VAL->ACRESC
+					nSaldo          += VAL->SALDO
+					nJurosMulta     += VAL->JR_MUL
+					nSaldoQuitacao  += VAL->SLD_QUIT
+
+					VAL->(dbSkip())
+
+				end
+
+				nLinExcel++
+                nAtual ++
+                If nAtual % 2 != 0
+                    cCorFundo := cCorAzulC1
+                Else
+                    cCorFundo := cCorAzulC2
+                EndIf
+                //Reseta a formatação
+                oFWMsExcelEx:ResetCellsFormat()
+                cHorAlinha := oCellHoriz:Left()
+                cHorBlinha := oCellHoriz:Right()
+                //Em seguida, define a formatação da coluna, sendo que o texto será preto
+				
+
+                oFWMsExcelEx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, cCorPreto, cCorFundo, cCustFormaTXT)
+                
+                oFWMsExcelEx:SetText(nLinExcel, 01, cFilialAtual)
+                oFWMsExcelEx:SetText(nLinExcel, 02, cClienteAt)
+                oFWMsExcelEx:SetText(nLinExcel, 03, cPrefixo)
+                oFWMsExcelEx:SetText(nLinExcel, 04, cDocumento)
+                oFWMsExcelEx:SetCellsFormat(cHorBlinha, cVerAlinha, .F., nRotation, cCorPreto, cCorFundo, cCustFormaNUM)
+                oFWMsExcelEx:SetNumber(nLinExcel, 05, nValor)
+                oFWMsExcelEx:SetCellsFormat(cHorBlinha, cVerAlinha, .F., nRotation, cCorPreto, cCorFundo, cCustFormaNUM)
+                oFWMsExcelEx:SetNumber(nLinExcel, 06, nAcrescimo)
+                oFWMsExcelEx:SetCellsFormat(cHorBlinha, cVerAlinha, .F., nRotation, cCorPreto, cCorFundo, cCustFormaNUM)
+                oFWMsExcelEx:SetNumber(nLinExcel, 07, nSaldo)
+                oFWMsExcelEx:SetCellsFormat(cHorBlinha, cVerAlinha, .F., nRotation, cCorPreto, cCorFundo, cCustFormaNUM)
+                oFWMsExcelEx:SetNumber(nLinExcel, 08, nJurosMulta)
+                oFWMsExcelEx:SetCellsFormat(cHorBlinha, cVerAlinha, .F., nRotation, cCorPreto, cCorFundo, cCustFormaNUM)
+                oFWMsExcelEx:SetNumber(nLinExcel, 09, nSaldoQuitacao)
+                oFWMsExcelEx:SetCellsFormat(cHorAlinha, cVerAlinha, .F., nRotation, cCorPreto, cCorFundo, cCustFormaTXT)
+                oFWMsExcelEx:SetText(nLinExcel, 10, cSecuritizadora)
+                oFWMsExcelEx:SetText(nLinExcel, 11, cParceiro)
+
+				VAL->(DbCloseArea())
+				CLI->(dbSkip())
+
+			end
+			CLI->(DbCloseArea())
+			FIL->(dbSkip())
+		end
+		FIL->(DbCloseArea())
+		oFWMsExcelEx:ToXlsx()
+        oFWMsExcelEx:EraseBaseFile()
+        cArquivo := ChgFileExt(cArquivo, '.xlsx')
+        oFWMsExcelEx:DeActivate() 
+        MsgInfo("Arquivo pronto para conferência! Acesse: "+cArquivo, "Aviso")
+	EndIf
+Return
+
+/*/{Protheus.doc} PerguntaAVP
+	Funcao responsavel pela criacao das perguntas a serem utilizadas
+	@type  Static Function
+	@author José Vitor Rodrigues
+	@since 19/05/2025
+	@version 1.0
+	@return bReturn, logical, retorna se foi respondida a pergunta
+/*/
+Static Function PerguntaAVP()
+	Local aPerguntas:= {} as array
+	Local bReturn := .F.  as logical
+
+	//Variaveis com o tamanho dos campos das perguntas
+    Local cTamDesp       := "N"                            as character
+	Local nNum           := 0                              as numeric
+    Local dDefDataBase   := Date()                         as date
+    
+    //Adiciona os parâmetros
+    aadd(aPerguntas, {1, "Inclui Despesas (S/N)"    , cTamDesp      , "" , ".T.", ""   , ".T.", 50, .F.})
+    aadd(aPerguntas, {1, "Taxa de Juros (a.m. %)"   , nNum          , "@E 9.99999", ".T.", ""   , ".T.", 50, .F.})
+    aadd(aPerguntas, {1, "Taxa de Desconto (a.m. %)", nNum          , "@E 9.99999", ".T.", ""   , ".T.", 50, .F.})
+    aadd(aPerguntas, {1, "Multa"                    , nNum          , "@E 9.99999", ".T.", ""   , ".T.", 50, .F.})
+    aadd(aPerguntas, {1, "Data Base"                , dDefDataBase  , "" , ".T.", ""   , ".T.", 50, .F.})
+    aadd(aPerguntas, {1, "Aliq.IGPM "               , nNum          , "@E 9.99999", ".T.", ""   , ".T.", 50, .F.})
+    
+    //Se a pergunta foi confirmada
+    If ParamBox(aPerguntas, "Informe os parâmetros")
+        bReturn := .T.
+    EndIf
+	
+Return bReturn
+
+/*/{Protheus.doc} GetFilial
+	Funcao responsável pela chamada do browser para selecionar as filiais
+	@type  Static Function
+	@author José Vitor Rodrigues
+	@since 19/05/2025
+	@version 1.0
+/*/
+Static Function GetFilial()
+    Local aArea         := GetArea()
+    Local aCampos := {}
+    Local oTTable := Nil
+    Local aColunas := {}
+    local nX
+    //Janela e componentes
+    Private oDlgMark
+    Private oPanGrid
+    Private oMaBrowse
+    Private cAlTmp := GetNextAlias()
+    //Tamanho da janela
+    Private aTamanho := MsAdvSize()
+    Private nJanLarg := aTamanho[5]
+    Private nJanAltu := aTamanho[6]
+
+    //Adiciona as colunas que serão criadas na temporária
+    aAdd(aCampos, { 'CODIGO', 'C', 2, 0,''}) //Código
+    aAdd(aCampos, { 'FILIAL', 'C', 6, 0,''}) //Filial
+    aAdd(aCampos, { 'NOME', 'C', 50, 0,''}) //Nome
+    aAdd(aCampos, { 'OK', 'C', 2, 0,''}) //Flag para marcação
+
+    //Cria a tabela temporária
+    oTTable:= FWTemporaryTable():New(cAlTmp)
+    oTTable:SetFields( aCampos )
+    oTTable:Create()  
+
+    Popula()
+    //Percorrendo todos os campos da estrutura e adicionando na aColuna
+    For nX := 1 To Len(aCampos)-1    
+        AAdd(aColunas,FWBrwColumn():New())
+        aColunas[Len(aColunas)]:SetData( &("{||"+aCampos[nX][1]+"}") )
+        aColunas[Len(aColunas)]:SetTitle(aCampos[nX][1])
+        aColunas[Len(aColunas)]:SetSize(aCampos[nX][3])
+        aColunas[Len(aColunas)]:SetDecimal(aCampos[nX][4])              
+    Next nX 
+
+    DEFINE MSDIALOG oDlgMark TITLE 'SELECIONE UMA FILIAL' FROM 000, 000  TO 600, 800 COLORS 0, 16777215 PIXEL
+        //Dados
+        oPanGrid := tPanel():New(001, 001, '', oDlgMark, , , , , , (800/2)-1,     (600/2 - 1))
+        oMaBrowse:= FWMarkBrowse():New()
+        oMaBrowse:SetDescription("SELEÇÃO DE FILIAL") //Titulo da Janela
+        oMaBrowse:SetAlias(cAlTmp)
+        oMaBrowse:AddButton("Confirma",{|| SelFil() } ,,3,,.F.)
+        oMaBrowse:AddButton("Cancela",{|| cancelar() } ,,2,,.F.)
+        oMaBrowse:AddButton("Selecionar Tudo", {||oMaBrowse:AllMark()},,4,,.F.)
+        oMaBrowse:SetTemporary(.T.) //Indica que o Browse utiliza tabela temporária
+        oMaBrowse:SetFieldMark('OK')
+        oMaBrowse:SetOwner(oPanGrid)
+        oMaBrowse:SetLineHeight(5) 
+        oMaBrowse:SetColumns(aColunas)
+        oMaBrowse:Activate()
+
+    ACTIVATE MsDialog oDlgMark CENTERED
+    
+    RestArea(aArea)    
+    
+Return 
+
+/*/{Protheus.doc} cancelar
+	Função que cancela a seleção das filiais
+	@type  Static Function
+	@author José Vitor Rodrigues
+	@since 21/05/2025
+	@version 1.0
+/*/
+Static Function cancelar()
+	bFilSel := .F.
+	oDlgMark:End()
+Return 
+
+/*/{Protheus.doc} Popula
+	Funcao responsavel por obter as filiais em carteira
+	@type  Static Function
+	@author José Vitor Rodrigues
+	@since 19/05/2025
+	@version 1.0
+/*/
+Static Function Popula()
+    dbSelectArea("SM0")
+    dbSetOrder(1)
+    SM0->(dbGoTop())
+
+    While SM0->(!EOF())
+        If SM0->M0_CODIGO == '02'
+
+            if Select("cQryFil")>0
+
+                cQryFil->(dbCloseArea())
+
+            EndIf
+
+            BeginSql Alias "cQryFil"
+
+                SELECT ZA2_FILIAL FROM %table:ZA2% ZA2
+                WHERE ZA2_FILIAL = %Exp:SM0->M0_CODFIL%
+                AND ZA2.%notDel%
+                GROUP BY ZA2_FILIAL
+                
+            EndSql
+            
+            While cQryFil->(!EOF())
+
+                RecLock(cAlTmp, .T.)
+                    (cAlTmp)->OK := Space(2)
+                    (cAlTmp)->CODIGO := SM0->M0_CODIGO
+                    (cAlTmp)->FILIAL := SM0->M0_CODFIL
+                    (cAlTmp)->NOME   := SM0->M0_NOMECOM
+                (cAlTmp)->(MsUnlock())
+
+                cQryFil->(dbSkip())
+
+            EndDo
+
+        Endif
+        SM0->(dbSkip())
+    Enddo
+Return
+
+/*/{Protheus.doc} SelFil
+	Funcao responsavel por obter todas as filiais selecionadas e salvar na cFiliais
+	@type  Static Function
+	@author José Vitor Rodrigues
+	@since 19/05/2025
+	@version 1.0
+/*/
+Static Function SelFil()
+   local cMarca := oMaBrowse:Mark()
+   local nCont  := 0
+   DBSELECTAREA(  (cAlTmp) )
+   (cAlTmp)->(dbGoTop())
+   While (cAlTmp)->(!EOF())
+      if oMaBrowse:IsMark(cMarca)
+         if nCont == 0
+            cFiliais := "'"+(cAlTmp)->FILIAL+"'"
+            nCont ++
+         else
+            cFiliais += ",'"+(cAlTmp)->FILIAL+"'"
+         end
+      ENDIF
+      (cAlTmp)->(dbSkip())
+   EndDo
+	bFilSel := .T.
+   oDlgMark:End()
+Return 
